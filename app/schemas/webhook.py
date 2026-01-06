@@ -2,51 +2,73 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Any
 from datetime import datetime
 
-# --- 1. Sous-Modèles (Les briques) ---
+# --- 1. SOUS-MODÈLES (Les briques) ---
 
 class SenderInfo(BaseModel):
-    """Infos sur la personne qui envoie le message"""
-    attendee_id: Optional[str] = None      # ID unique (ex: numéro de tel)
-    attendee_name: Optional[str] = "Inconnu" # Nom affiché dans WhatsApp
+    """Identité de l'expéditeur normalisée."""
+    attendee_id: Optional[str] = Field(default=None, description="ID unique (souvent le num tel)")
+    attendee_name: Optional[str] = Field(default="Inconnu", description="Nom affiché")
 
-# --- 2. Modèle Principal (Le Message) ---
+class Attachment(BaseModel):
+    """Structure d'un fichier joint (Image, Vocal, PDF)."""
+    id: Optional[str] = None
+    type: str = "unknown"  # image, audio, document...
+    url: Optional[str] = None
+    mimetype: Optional[str] = None
+    filename: Optional[str] = None
+    size: Optional[int] = 0
+
+# --- 2. MODÈLE PRINCIPAL (L'Événement) ---
 
 class UnipileMessageEvent(BaseModel):
     """
-    Représente un événement 'Message' reçu d'Unipile.
-    Validé strictement pour éviter les erreurs de type 'KeyError' plus tard.
+    Modèle strict et exhaustif pour l'événement 'message_received' d'Unipile.
     """
-    event: str  # Le type d'action (message_received, message_sent...)
-    account_id: str  # <--- AJOUTE CETTE LIGNE (C'est crucial)
-
-    # Identifiants cruciaux
-    message_id: str
+    # Métadonnées techniques
+    event: str = Field(description="Type d'événement (ex: message_received)")
+    account_id: str = Field(description="ID du compte Unipile connecté")
+    
+    # Identifiants Uniques
+    message_id: str = Field(alias="id")  # Unipile envoie "id", on le mappe vers "message_id" pour la clarté
     chat_id: str
     
-    # Contenu
+    # Horodatage
     timestamp: str 
-    # Unipile appelle le champ "message", mais nous on préfère l'appeler "text" dans notre code
-    text: Optional[str] = Field(alias="message", default="")
     
-    # Qui ?
+    # Contenu du message
+    # Unipile met le texte dans "text" OU "body" selon les versions, on gère les deux via alias
+    text: Optional[str] = Field(default="", validation_alias="text") 
+    
+    # Qui parle ?
     sender: SenderInfo = Field(default_factory=SenderInfo)
-    is_sender: bool = False # True si c'est TOI qui as écrit
+    is_sender: bool = Field(default=False, description="True si c'est le propriétaire du compte qui parle")
     
-    # Média (Images, Vocaux...) - On garde la liste brute pour l'instant
-    attachments: List[Any] = []
+    # Infos sur le Groupe (Nouveau & Important)
+    chat_name: Optional[str] = Field(default=None, description="Nom du groupe si disponible")
+    # Liste des IDs des participants (utile pour savoir qui est dans la discussion)
+    attendees_ids: List[str] = Field(default=[], alias="attendees") 
 
-    # --- Validateurs Intelligents ---
-    
-    @field_validator('timestamp')
+    # Pièces jointes (Typées proprement maintenant)
+    attachments: List[Attachment] = Field(default_factory=list)
+
+    # --- Validateurs & Logique ---
+
+    @field_validator('timestamp', mode='before')
     @classmethod
-    def validate_timestamp(cls, v):
-        """Si le timestamp est vide ou nul, on met l'heure actuelle pour ne pas planter"""
+    def normalize_timestamp(cls, v):
+        """Assure qu'on a toujours une date valide, même si vide."""
         if not v:
-            return datetime.now().isoformat()
+            return datetime.utcnow().isoformat()
         return v
 
+    @field_validator('text', mode='before')
+    @classmethod
+    def ensure_text_string(cls, v):
+        """Évite les crashs si le texte est None (ex: juste une image)."""
+        return v if v else ""
+
     class Config:
-        # Si Unipile ajoute des nouveaux champs dans le futur, on les ignore (pas de crash)
-        extra = "ignore" 
-        # Permet d'utiliser message.text (notre nom) OU message.message (nom Unipile)
-        populate_by_name = True
+        """Configuration Pydantic Avancée"""
+        extra = "ignore"            # Ignore les champs inconnus (futurs updates Unipile)
+        populate_by_name = True     # Permet d'utiliser nos noms (message_id) OU les alias (id)
+        from_attributes = True      # Compatible avec les ORM si besoin
