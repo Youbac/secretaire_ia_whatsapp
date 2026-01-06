@@ -1,0 +1,22 @@
+# --- SÉCURITÉ (NE JAMAIS PUSH) ---
+.env
+config.py
+firebase_credentials.json
+client_secret.json
+*.pem
+*.key
+
+# --- Python & Environnement ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# --- IDE & Système ---
+.vscode/
+.idea/
+.DS_Store
+
+# --- Logs ---
+*.log
