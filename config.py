@@ -28,12 +28,13 @@ class Settings(BaseSettings):
 
     # --- 3. INTELLIGENCE ARTIFICIELLE ---
     GOOGLE_API_KEY: str = ""           # Clé Gemini
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    GEMINI_MODEL: str = "gemini-2.0-flash-exp"
 
     # --- 4. GOOGLE SHEETS (Le Tableau de Bord) ---
-    SHEET_ID_SALES: Optional[str] = ""
-    SHEET_ID_STRATEGY: Optional[str] = ""
-    SHEET_ID_OPS: Optional[str] = ""
+    SHEET_ID_SALES: str = "1t24fk9NKkm8wJgrJCq1T-kVRSR8_oyORCFbDf4JbWAk"
+    SHEET_ID_STRATEGY: str = "1Z1v2-T9ifdiwF5-ec3e4mVsFRDq6jJ1REMEZYBO0R1k"
+    SHEET_ID_OPS: str = "1EJF6FQfFJYNHaYbaMvZW_8joKzBiPcayamD_ke0MoRA"
+    FINANCE_SHEET_ID: str = "1FcOogvLNHlaDIDjqqWiJ659-B8O4MNI-gjFaSNUthHk"
 
     # --- 5. ANNUAIRE & RÔLES ---
     MY_NUMBER: str = ""
