@@ -1,92 +1,78 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Any
 from datetime import datetime
 
-# --- 1. SOUS-MODÈLES (Les briques) ---
+# --- 1. SOUS-MODÈLES ---
 
 class SenderInfo(BaseModel):
-    """Identité de l'expéditeur normalisée."""
-    attendee_id: Optional[str] = Field(default=None, description="ID unique")
-    attendee_name: Optional[str] = Field(default="Inconnu", description="Nom affiché")
+    """Identité de l'expéditeur."""
+    attendee_id: Optional[str] = Field(default=None)
+    attendee_name: Optional[str] = Field(default="Inconnu")
     
     class Config:
         extra = "ignore"
 
 class Attachment(BaseModel):
-    """Structure d'un fichier joint."""
     id: Optional[str] = None
     type: str = "unknown"
     url: Optional[str] = None
-    mimetype: Optional[str] = None
     filename: Optional[str] = None
-    size: Optional[int] = 0
 
 class AttendeeItem(BaseModel):
-    """
-    CORRECTIF : Structure pour un participant dans la liste 'attendees'.
-    Unipile envoie un objet complet, pas juste un ID string.
-    """
+    """Structure pour les participants (liste d'objets complexes)."""
     attendee_id: Optional[str] = None
     attendee_name: Optional[str] = None
     
     class Config:
         extra = "ignore"
 
-# --- 2. MODÈLE PRINCIPAL (L'Événement) ---
+# --- 2. MODÈLE PRINCIPAL ---
 
 class UnipileMessageEvent(BaseModel):
-    """
-    Modèle strict et exhaustif pour l'événement 'message_received' d'Unipile.
-    """
-    # Métadonnées techniques
-    event: str = Field(description="Type d'événement")
-    account_id: str = Field(description="ID du compte Unipile")
-    
-    # Identifiants Uniques
+    # Champs techniques
+    event: str
+    account_id: str
     message_id: str = Field(alias="id")  
     chat_id: str
-    
-    # Horodatage
     timestamp: str 
     
-    # Contenu du message
-    text: Optional[str] = Field(default="", validation_alias="text") 
+    # LE CHAMP PROBLÉMATIQUE (On le laisse simple ici)
+    text: str = Field(default="") 
     
-    # Qui parle ?
+    # Le reste...
     sender: SenderInfo = Field(default_factory=SenderInfo)
     is_sender: bool = Field(default=False)
-    
-    # Infos sur le Groupe
     chat_name: Optional[str] = Field(default=None)
-    
-    # CORRECTIF : On mappe le JSON 'attendees' vers une liste d'objets, pas de strings
     attendees_data: List[AttendeeItem] = Field(default=[], alias="attendees") 
-
-    # Pièces jointes
     attachments: List[Attachment] = Field(default_factory=list)
 
-    # --- Propriétés Calculées (Pour compatibilité) ---
-    
+    # --- LA SOLUTION MAGIQUE ---
+    @model_validator(mode='before')
+    @classmethod
+    def unify_text_field(cls, data: Any) -> Any:
+        """
+        Va chercher le contenu du message PEU IMPORTE son nom.
+        Unipile change souvent entre 'message', 'text', 'body'.
+        On attrape tout et on le range dans 'text'.
+        """
+        if isinstance(data, dict):
+            # On cherche le contenu dans l'ordre de priorité
+            content = data.get('text') or data.get('message') or data.get('body')
+            
+            # Si on a trouvé quelque chose, on l'impose dans le champ 'text'
+            if content:
+                data['text'] = str(content) # On s'assure que c'est du string
+        return data
+
+    # --- Propriétés Helper ---
     @property
     def attendees_ids(self) -> List[str]:
-        """
-        Extrait automatiquement la liste des IDs pour que le reste du code continue de marcher.
-        """
         return [a.attendee_id for a in self.attendees_data if a.attendee_id]
-
-    # --- Validateurs & Logique ---
 
     @field_validator('timestamp', mode='before')
     @classmethod
     def normalize_timestamp(cls, v):
-        if not v:
-            return datetime.utcnow().isoformat()
-        return v
-
-    @field_validator('text', mode='before')
-    @classmethod
-    def ensure_text_string(cls, v):
-        return v if v else ""
+        return v if v else datetime.utcnow().isoformat()
 
     class Config:
         extra = "ignore"            
