@@ -110,10 +110,11 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 
 # --- 5. Point d'entrée Local ---
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
     # Ne se lance que si on exécute 'python main.py' directement
     uvicorn.run(
         "main:app", 
         host="0.0.0.0", 
-        port=8000, 
+        port=port, 
         reload=True # Reload auto si on change le code (Dev Experience)
     )
