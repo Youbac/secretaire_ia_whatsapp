@@ -28,11 +28,9 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # --- 2. CORE FUNCTIONS ---
-
 def save_message_event(event: UnipileMessageEvent) -> bool:
     """
-    Saves an incoming message with enriched metadata for groups.
-    Updates the parent 'chat' document to flag it for nightly analysis.
+    Sauvegarde robuste qui ne plante jamais même si des infos manquent.
     """
     try:
         batch = db.batch()
@@ -40,52 +38,53 @@ def save_message_event(event: UnipileMessageEvent) -> bool:
         chat_ref = db.collection("chats").document(event.chat_id)
         msg_ref = chat_ref.collection("messages").document(event.message_id)
 
-        # 1. Prepare Message Document
-        # model_dump converts Pydantic to Dict, using aliases (id -> message_id)
+        # 1. Préparation du Message
         msg_doc = event.model_dump(exclude={"event"}, by_alias=True)
         msg_doc["stored_at"] = google_firestore.SERVER_TIMESTAMP
         
-        # 2. Smart Group Logic
+        # 2. Logique de Groupe
         attendees_list = event.attendees_ids or []
-        # A chat is a group if it has > 2 people OR specifically ends in @g.us (WhatsApp standard)
         is_group = len(attendees_list) > 2 or (event.chat_id and "@g.us" in event.chat_id)
         
-        chat_name = event.chat_name
+        # 3. Préparation Chat (Parent) - VERSION SÉCURISÉE
+        sender_name = event.sender.attendee_name or "Inconnu"
+        # Sécurité : Si attendee_id est vide, on met une liste vide pour ne pas crasher Firestore
+        sender_id = event.sender.attendee_id
         
-        # 3. Prepare Chat Metadata Update (Parent Doc)
-        sender_name = event.sender.attendee_name or "Unknown"
-        preview_text = (event.text or "📎 Media/File")[:100]
+        preview_text = (event.text or "📎 Média")[:100]
 
         chat_update = {
             "last_message_preview": f"{sender_name}: {preview_text}",
             "last_activity": event.timestamp,
             "updated_at": google_firestore.SERVER_TIMESTAMP,
             "is_group": is_group,
-            
-            # Add sender to participant lists (ArrayUnion adds only if unique)
-            "participants_names": firestore.ArrayUnion([sender_name]),
-            "participants_ids": firestore.ArrayUnion([event.sender.attendee_id]),
-            
-            # Metadata for the Nightly Reporter
-            "ai_processed": False,      # Flag: Has not been summarized yet
-            "needs_summary": True       # Flag: Explicitly needs attention
+            "ai_processed": False, 
+            "needs_summary": True
         }
 
-        if chat_name:
-            chat_update["chat_name"] = chat_name
+        # On n'ajoute aux participants que si l'ID existe vraiment
+        if sender_id:
+            chat_update["participants_ids"] = firestore.ArrayUnion([sender_id])
+        
+        if sender_name:
+            chat_update["participants_names"] = firestore.ArrayUnion([sender_name])
 
-        # 4. Execute Batch
+        if event.chat_name:
+            chat_update["chat_name"] = event.chat_name
+
+        # 4. Exécution
         batch.set(msg_ref, msg_doc)
-        batch.set(chat_ref, chat_update, merge=True) # merge=True is VITAL to keep existing tags/notes
+        batch.set(chat_ref, chat_update, merge=True)
 
         batch.commit()
         
-        logger.info(f"💾 Saved Msg from {sender_name} | Chat: {event.chat_id} | Group: {is_group}")
+        logger.info(f"💾 Message SAUVEGARDÉ ! De: {sender_name} (Chat: {event.chat_id})")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Critical Firestore Error: {str(e)}", exc_info=True)
-        raise e
+        # Avec la nouvelle config de logs, ceci devrait enfin s'afficher en rouge si ça plante encore
+        logger.error(f"❌ ERREUR CRITIQUE FIRESTORE: {str(e)}", exc_info=True)
+        return False
 
 # --- 3. RETRIEVAL FUNCTIONS (For Nightly Agents) ---
 

@@ -1,37 +1,35 @@
+
 import uvicorn
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
-from contextlib import asynccontextmanager
 import logging
 import os
+from fastapi import FastAPI, Request, BackgroundTasks
+from contextlib import asynccontextmanager
 
-# Imports internes modulaires
+# --- 1. CONFIGURATION LOGS (EN PREMIER ABSOLU !) ---
+# On force l'affichage immédiat pour Render
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+    force=True 
+)
+logger = logging.getLogger("main_server")
+
+# --- 2. Imports de l'application ---
 from config import settings
 from app.schemas.webhook import UnipileMessageEvent
 from app.services.firestore import save_message_event
 
-# --- Configuration des Logs ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("main_server")
-
-# --- 1. Cycle de Vie (Startup / Shutdown) ---
+# --- 3. Cycle de Vie ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Gestion propre du démarrage et de l'arrêt.
-    Permet d'initialiser les connexions avant d'accepter des requêtes.
-    """
-    # Au démarrage
     logger.info("🚀 [System] Démarrage du Secrétaire IA WhatsApp (v2.0)...")
-    
-    mode = "CLOUD (Base64)" if settings.FIREBASE_CRED_BASE64 else "LOCAL (Fichier)"
-    logger.info(f"🔧 [Config] Mode Environnement: {mode}")
-    
-    # Ici, on pourrait pré-charger des modèles IA lourds si besoin
-    
-    yield # Le serveur tourne ici...
-    
-    # À l'arrêt
-    logger.info("🛑 [System] Arrêt gracieux du serveur.")
+    logger.info(f"🔧 [Config] Mode Environnement: {'CLOUD' if settings.FIREBASE_CRED_BASE64 else 'LOCAL'}")
+    yield
+    logger.info("🛑 [System] Arrêt du serveur.")
+
+# --- 4. Initialisation FastAPI ---
+app = FastAPI(lifespan=lifespan)
 
 # --- 2. Initialisation FastAPI ---
 app = FastAPI(
