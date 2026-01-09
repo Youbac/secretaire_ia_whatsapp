@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     FIREBASE_CRED_PATH: str = "firebase_credentials.json"
     # Contenu Base64 (pour Render/Prod où on ne peut pas avoir de fichier)
     FIREBASE_CRED_BASE64: Optional[str] = None 
-
+    FIREBASE_STORAGE_BUCKET: Optional[str] = None
     # --- 2. UNIPILE (Le Tuyau WhatsApp) ---
     UNIPILE_DSN: str = ""      # URL API
     UNIPILE_API_KEY: str = ""  # Token
