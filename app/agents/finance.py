@@ -1,171 +1,150 @@
-import requests
-import gspread
-import json
 import logging
-from typing import Optional, List, Dict, Any
-from google import genai
-from oauth2client.service_account import ServiceAccountCredentials
+import json
+import asyncio
 from datetime import datetime
+from typing import List, Dict, Any
 
-# Import Settings
+# Services Centralisés (Architecture Propre)
+from app.services.gemini import GeminiService
+from app.services.sheets import GoogleSheetsService
+from app.services.firestore import get_new_messages_only, mark_chat_as_processed
+
+# Configuration
 from config import settings
 
-# Configure Logger
 logger = logging.getLogger(__name__)
 
 class FinanceAnalyst:
     """
-    Agent responsible for analyzing financial discussions on WhatsApp
-    and logging transactions into Google Sheets.
-    Uses the new Google GenAI SDK.
+    Agent spécialisé dans l'analyse financière.
+    Il lit les messages Firestore, extrait les transactions via Gemini,
+    et les insère dans Google Sheets via le Service centralisé.
     """
 
-    def __init__(self):
-        self._init_ai()
-        self._init_sheets()
+    # ID du groupe Whatsapp "Finance" (À mettre idéalement dans config.py, mais gardé ici pour l'instant)
+    CHAT_ID = "-zeA_LzlUnS3nCeRyIdS5Q"
+
+    def __init__(self, gemini_service: GeminiService, sheets_service: GoogleSheetsService):
+        """
+        Injection de dépendances : On lui donne les outils dont il a besoin.
+        """
+        self.gemini = gemini_service
+        self.sheets = sheets_service
+
+    async def run_analysis(self) -> str:
+        """
+        Pipeline principal : Lecture DB -> Analyse IA -> Ecriture Sheets.
+        """
+        logger.info(f"💰 [Finance] Démarrage de l'analyse pour le chat {self.CHAT_ID}...")
+
+        # 1. Récupération des messages NON TRAITÉS depuis Firestore
+        # (Plus besoin d'appeler l'API Unipile, on a déjà les données !)
+        conversation_text = get_new_messages_only(self.CHAT_ID)
         
-        # Target WhatsApp Conversation
-        self.chat_id = "-zeA_LzlUnS3nCeRyIdS5Q" 
+        if not conversation_text:
+            logger.info("📭 [Finance] Pas de nouveaux messages à analyser.")
+            return "Pas de nouveaux messages."
 
-    def _init_ai(self):
-        """Initializes the new Gemini Client."""
-        try:
-            self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-            self.model_name = settings.GEMINI_MODEL
-        except Exception as e:
-            logger.error(f"❌ [Finance] AI Init failed: {e}")
-            self.client = None
-
-    def _init_sheets(self):
-        """Connects to Google Sheets using the centralized logic."""
-        self.sheet = None
-        try:
-            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-            creds_data = settings.get_firebase_credentials()
-
-            if not creds_data:
-                logger.warning("⚠️ [Finance] No Firebase credentials found.")
-                return
-
-            if isinstance(creds_data, str):
-                creds = ServiceAccountCredentials.from_json_keyfile_name(creds_data, scope)
-            else:
-                creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_data, scope)
-
-            client = gspread.authorize(creds)
-            
-            if not settings.FINANCE_SHEET_ID:
-                logger.warning("⚠️ [Finance] No Sheet ID configured.")
-                return
-
-            self.sheet = client.open_by_key(settings.FINANCE_SHEET_ID).sheet1
-            logger.info("✅ [Finance] Connected to Google Sheet.")
-            
-        except Exception as e:
-            logger.error(f"❌ [Finance] Sheet Connection failed: {e}")
-
-    def get_recent_messages(self, limit=30) -> str:
-        """Fetches raw messages from Unipile."""
-        url = f"https://{settings.UNIPILE_DSN}/api/v1/chats/{self.chat_id}/messages"
-        headers = {"X-API-Key": settings.UNIPILE_API_KEY}
+        # 2. Analyse IA (Extraction JSON)
+        transactions = await self._extract_transactions(conversation_text)
         
-        try:
-            response = requests.get(url, headers=headers, params={"limit": limit}, timeout=10)
-            if response.status_code != 200:
-                logger.warning(f"⚠️ [Finance] WhatsApp API Error: {response.status_code}")
-                return ""
-            
-            data = response.json()
-            messages = data.get("items", [])
-            history = []
-            
-            for msg in messages:
-                if msg.get("type") == "text":
-                    # Determine sender
-                    is_me = msg.get("sender_id") == settings.UNIPILE_ACCOUNT_ID
-                    sender = "Moi" if is_me else "Partenaire"
-                    
-                    timestamp = msg.get("timestamp", "")
-                    text = msg.get("text", "")
-                    history.append(f"[{timestamp}] {sender}: {text}")
-            
-            # Return chronological order
-            return "\n".join(reversed(history))
+        if not transactions:
+            # Si on a lu des messages mais trouvé aucune transaction, on marque quand même comme lu
+            mark_chat_as_processed(self.CHAT_ID)
+            return "Messages lus, aucune transaction détectée."
 
-        except Exception as e:
-            logger.error(f"❌ [Finance] Fetch Messages failed: {e}")
-            return ""
+        # 3. Sauvegarde dans Google Sheets
+        success_count = await self._save_to_sheets(transactions)
 
-    def process_and_save(self) -> str:
-        """Main Pipeline: Read -> Analyze -> Save."""
-        
-        # 1. Get Data
-        logger.info("🔍 [Finance] Reading WhatsApp messages...")
-        conversation = self.get_recent_messages()
-        if not conversation:
-            return "⚠️ Pas de messages trouvés ou erreur API."
+        # 4. Marquage des messages comme "Traités" dans Firestore
+        if success_count > 0:
+            mark_chat_as_processed(self.CHAT_ID)
+            return f"✅ Succès : {success_count} transactions sauvegardées."
+        else:
+            return "⚠️ Erreur lors de la sauvegarde Sheets."
 
-        # 2. Analyze with Gemini (New SDK)
-        logger.info("🧠 [Finance] Analyzing with Gemini...")
-        prompt = f"""
-        Role: Expert Comptable.
-        Task: Extraire les transactions financières de cette conversation.
+    async def _extract_transactions(self, text: str) -> List[Dict[str, Any]]:
+        """Demande à Gemini d'extraire les données structurées."""
         
-        Conversation:
-        {conversation}
+        system_prompt = """
+        Tu es un Expert Comptable rigoureux.
+        Ta mission : Extraire les transactions financières de cette conversation WhatsApp.
         
-        Output Format: JSON Array ONLY.
-        Keys: "date" (YYYY-MM-DD), "type" (DEPENSE/GAIN), "montant" (float), "description" (string), "qui" (string).
+        Règles :
+        1. Ignore les discussions hors-sujet.
+        2. Extrais : Date, Type (DEPENSE/RECETTE), Montant, Description, Qui a payé.
+        3. Si la date n'est pas explicite, utilise la date du jour.
         
-        If no transaction found, return [].
-        Do not add markdown formatting like ```json.
+        Format de sortie STRICT : Un tableau JSON uniquement.
+        Exemple :
+        [
+            {"date": "2023-10-27", "type": "DEPENSE", "montant": 45.50, "description": "Restaurant client", "qui": "Vincent"}
+        ]
         """
 
         try:
-            if not self.client:
-                return "❌ Erreur: Client AI non initialisé."
-
-            # Synchrone call for simplicity in this script context
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
+            # Appel au service Gemini centralisé (Gère les retries tout seul)
+            response = await self.gemini.generate_response(
+                system_instruction=system_prompt,
+                user_message=f"Conversation à analyser :\n{text}"
             )
-            
-            raw_text = response.text
-            # Clean potential markdown
-            clean_json = raw_text.replace("```json", "").replace("```", "").strip()
-            
-            transactions = json.loads(clean_json)
 
-            if not transactions:
-                return "✅ Aucune nouvelle transaction détectée."
-
-            # 3. Save to Sheets
-            if self.sheet:
-                count = 0
-                for t in transactions:
-                    row = [
-                        t.get("date", datetime.now().strftime("%Y-%m-%d")),
-                        t.get("type", "UNKNOWN"),
-                        t.get("montant", 0),
-                        t.get("description", ""),
-                        t.get("qui", "?")
-                    ]
-                    self.sheet.append_row(row)
-                    count += 1
-                return f"✅ Succès ! {count} transactions ajoutées."
-            else:
-                return "⚠️ Analyse réussie, mais Google Sheet inaccessible."
+            # Nettoyage du Markdown (Gemini aime bien mettre ```json ... ```)
+            cleaned_json = response.replace("```json", "").replace("```", "").strip()
+            
+            # Parsing
+            return json.loads(cleaned_json)
 
         except json.JSONDecodeError:
-            logger.error(f"❌ [Finance] Invalid JSON from AI: {raw_text}")
-            return "❌ Erreur: L'IA n'a pas renvoyé un JSON valide."
+            logger.error(f"❌ [Finance] L'IA a renvoyé un JSON invalide : {response}")
+            return []
         except Exception as e:
-            logger.error(f"❌ [Finance] Process failed: {e}")
-            return f"❌ Erreur critique: {e}"
+            logger.error(f"❌ [Finance] Erreur analyse IA : {e}")
+            return []
 
+    async def _save_to_sheets(self, transactions: List[Dict[str, Any]]) -> int:
+        """Pousse les données vers le Sheet Finance."""
+        if not settings.FINANCE_SHEET_ID:
+            logger.error("❌ [Finance] ID du Sheet non configuré dans settings.")
+            return 0
+
+        count = 0
+        for t in transactions:
+            row_values = [
+                t.get("date", datetime.now().strftime("%Y-%m-%d")),
+                t.get("type", "AUTRE"),
+                t.get("montant", 0),
+                t.get("description", "?"),
+                t.get("qui", "Inconnu")
+            ]
+            
+            # Utilisation du Service Sheets (Gère les quotas API et retries)
+            success = await self.sheets.append_row(
+                spreadsheet_id=settings.FINANCE_SHEET_ID,
+                range_name="Sheet1!A:E", # Assurez-vous que c'est le bon onglet
+                values=row_values
+            )
+            
+            if success:
+                count += 1
+        
+        return count
+
+# --- Zone de Test (Execution directe) ---
 if __name__ == "__main__":
-    # Test Run
-    logging.basicConfig(level=logging.INFO)
-    bot = FinanceAnalyst()
-    print(bot.process_and_save())
+    # Pour tester ce fichier seul, on doit initialiser les services manuellement
+    import asyncio
+    
+    async def main_test():
+        logging.basicConfig(level=logging.INFO)
+        
+        # On instancie les services
+        gemini = GeminiService()
+        sheets = GoogleSheetsService()
+        
+        # On lance l'agent
+        agent = FinanceAnalyst(gemini, sheets)
+        result = await agent.run_analysis()
+        print(f"Rapport : {result}")
+
+    asyncio.run(main_test())

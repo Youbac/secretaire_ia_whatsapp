@@ -112,17 +112,16 @@ async def run_strategy_analysis(gemini: GeminiService, sheets: GoogleSheetsServi
     except Exception as e:
         logger.error(f"❌ [STRATEGY] Critical Failure: {e}", exc_info=True)
 
-async def run_finance_analysis():
+async def run_finance_analysis(gemini: GeminiService, sheets: GoogleSheetsService):
     """Sub-process: Analyzes Finance Group."""
     logger.info("💰 [FINANCE] Starting analysis...")
     
     try:
-        # Note: FinanceAnalyst handles its own dependencies internally (as per your class design)
-        finance_agent = FinanceAnalyst()
+        # Injection des dépendances (Nouveau code propre)
+        finance_agent = FinanceAnalyst(gemini, sheets)
         
-        # We run it in a thread if it's blocking, but here assuming process_and_save is synchronous or hybrid
-        # If process_and_save is blocking, wrap it in asyncio.to_thread
-        result = await asyncio.to_thread(finance_agent.process_and_save)
+        # Appel Asynchrone (Plus de thread bloquant)
+        result = await finance_agent.run_analysis()
         
         logger.info(f"✅ [FINANCE] Result: {result}")
 
@@ -141,12 +140,11 @@ async def main():
         logger.critical(f"❌ Failed to initialize core services. Aborting. Error: {e}")
         return
 
-    # 2. Run All Tasks Concurrently (Optional) or Sequentially
-    # Running sequentially is safer for debugging
-    
+    # 2. Run All Tasks
+    # On passe les services à toutes les fonctions
     await run_sales_analysis(gemini, sheets)
     await run_strategy_analysis(gemini, sheets)
-    await run_finance_analysis()
+    await run_finance_analysis(gemini, sheets)
 
     logger.info("🌙 === DAILY REPORT COMPLETED === 🌙")
 

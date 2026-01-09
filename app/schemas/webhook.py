@@ -4,11 +4,28 @@ from datetime import datetime
 
 # --- 1. SOUS-MODÈLES ---
 
+class AttendeeSpecifics(BaseModel):
+    """
+    Détails techniques (contient le numéro de téléphone).
+    """
+    phone_number: Optional[str] = None
+    
+    class Config:
+        extra = "ignore"
+
 class SenderInfo(BaseModel):
     """Identité de l'expéditeur."""
     attendee_id: Optional[str] = Field(default=None)
     attendee_name: Optional[str] = Field(default="Inconnu")
+    attendee_specifics: Optional[AttendeeSpecifics] = None # <-- AJOUT ICI
     
+    @property
+    def phone(self) -> str:
+        """Helper pour récupérer le téléphone directement."""
+        if self.attendee_specifics and self.attendee_specifics.phone_number:
+            return self.attendee_specifics.phone_number
+        return ""
+
     class Config:
         extra = "ignore"
 
@@ -19,10 +36,18 @@ class Attachment(BaseModel):
     filename: Optional[str] = None
 
 class AttendeeItem(BaseModel):
-    """Structure pour les participants (liste d'objets complexes)."""
+    """Structure pour les participants."""
     attendee_id: Optional[str] = None
     attendee_name: Optional[str] = None
+    attendee_specifics: Optional[AttendeeSpecifics] = None # <-- AJOUT ICI
     
+    @property
+    def phone(self) -> str:
+        """Helper pour récupérer le téléphone directement."""
+        if self.attendee_specifics and self.attendee_specifics.phone_number:
+            return self.attendee_specifics.phone_number
+        return ""
+
     class Config:
         extra = "ignore"
 
@@ -36,7 +61,7 @@ class UnipileMessageEvent(BaseModel):
     chat_id: str
     timestamp: str 
     
-    # LE CHAMP PROBLÉMATIQUE (On le laisse simple ici)
+    # Contenu du message (Géré par le validateur unify_text_field)
     text: str = Field(default="") 
     
     # Le reste...
@@ -46,28 +71,28 @@ class UnipileMessageEvent(BaseModel):
     attendees_data: List[AttendeeItem] = Field(default=[], alias="attendees") 
     attachments: List[Attachment] = Field(default_factory=list)
 
-    # --- LA SOLUTION MAGIQUE ---
+    # --- LA SOLUTION MAGIQUE (Contenu du message) ---
     @model_validator(mode='before')
     @classmethod
     def unify_text_field(cls, data: Any) -> Any:
         """
-        Va chercher le contenu du message PEU IMPORTE son nom.
-        Unipile change souvent entre 'message', 'text', 'body'.
-        On attrape tout et on le range dans 'text'.
+        Attrape le contenu qu'il s'appelle 'text', 'message' ou 'body'.
         """
         if isinstance(data, dict):
-            # On cherche le contenu dans l'ordre de priorité
             content = data.get('text') or data.get('message') or data.get('body')
-            
-            # Si on a trouvé quelque chose, on l'impose dans le champ 'text'
             if content:
-                data['text'] = str(content) # On s'assure que c'est du string
+                data['text'] = str(content)
         return data
 
     # --- Propriétés Helper ---
     @property
     def attendees_ids(self) -> List[str]:
         return [a.attendee_id for a in self.attendees_data if a.attendee_id]
+
+    @property
+    def sender_phone(self) -> str:
+        """Raccourci pour avoir le téléphone de l'expéditeur"""
+        return self.sender.phone
 
     @field_validator('timestamp', mode='before')
     @classmethod
