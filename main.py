@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from contextlib import asynccontextmanager
 import logging
-
+import os
 # Imports internes modulaires
 from config import settings
 from app.schemas.webhook import UnipileMessageEvent
