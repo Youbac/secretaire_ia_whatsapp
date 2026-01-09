@@ -47,6 +47,9 @@ async def process_webhook_event(payload: dict):
     Avantage : Unipile reçoit son '200 OK' en 10ms, même si on met 5s à traiter.
     """
     try:
+        logger.info(f"[DEBUG] Payload brut: {payload}")
+        event = UnipileMessageEvent(**payload)
+        logger.info(f"[DEBUG] event.account_id={event.account_id}, filter={settings.UNIPILE_ACCOUNT_ID}")
         # 1. Validation Pydantic (Si le payload est invalide, ça s'arrête net)
         event = UnipileMessageEvent(**payload)
         
