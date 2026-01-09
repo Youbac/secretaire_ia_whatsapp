@@ -1,12 +1,11 @@
-
 import uvicorn
 import logging
 import os
 from fastapi import FastAPI, Request, BackgroundTasks
 from contextlib import asynccontextmanager
 
-# --- 1. CONFIGURATION LOGS (EN PREMIER ABSOLU !) ---
-# On force l'affichage immédiat pour Render
+# --- 1. CONFIGURATION LOGS (À PLACER TOUT EN HAUT) ---
+# Ceci force Render à afficher les logs immédiatement
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -16,6 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger("main_server")
 
 # --- 2. Imports de l'application ---
+# (On importe le reste APRÈS avoir configuré les logs)
 from config import settings
 from app.schemas.webhook import UnipileMessageEvent
 from app.services.firestore import save_message_event
