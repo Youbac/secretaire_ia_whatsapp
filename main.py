@@ -53,15 +53,9 @@ async def process_webhook_event(payload: dict):
         # 1. Validation Pydantic (Si le payload est invalide, ça s'arrête net)
         event = UnipileMessageEvent(**payload)
         
-                # --- NOUVEAU BLOC DE FILTRAGE ---
-        # Si on a configuré un ID spécifique et que le message ne vient pas de ce compte...
-        if settings.UNIPILE_ACCOUNT_ID and event.account_id != settings.UNIPILE_ACCOUNT_ID:
-            # On ignore silencieusement (ou avec un petit log debug)
-            logger.info(f"🚫 [Ignoré] Message pour un autre compte ({event.account_id})")
-            return
-        # -------------------------------
-
         # 2. Filtrage (On ne veut que les nouveaux messages entrants)
+        logger.info(f"[DEBUG] account_id reçu: {event.account_id}")
+
         # On ignore les 'read', 'typing', etc. pour l'instant
         if event.event not in ["message_received", "message_created"]:
             logger.debug(f"Event ignoré: {event.event}")
