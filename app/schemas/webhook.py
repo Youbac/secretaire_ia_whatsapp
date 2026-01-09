@@ -6,17 +6,31 @@ from datetime import datetime
 
 class SenderInfo(BaseModel):
     """Identité de l'expéditeur normalisée."""
-    attendee_id: Optional[str] = Field(default=None, description="ID unique (souvent le num tel)")
+    attendee_id: Optional[str] = Field(default=None, description="ID unique")
     attendee_name: Optional[str] = Field(default="Inconnu", description="Nom affiché")
+    
+    class Config:
+        extra = "ignore"
 
 class Attachment(BaseModel):
-    """Structure d'un fichier joint (Image, Vocal, PDF)."""
+    """Structure d'un fichier joint."""
     id: Optional[str] = None
-    type: str = "unknown"  # image, audio, document...
+    type: str = "unknown"
     url: Optional[str] = None
     mimetype: Optional[str] = None
     filename: Optional[str] = None
     size: Optional[int] = 0
+
+class AttendeeItem(BaseModel):
+    """
+    CORRECTIF : Structure pour un participant dans la liste 'attendees'.
+    Unipile envoie un objet complet, pas juste un ID string.
+    """
+    attendee_id: Optional[str] = None
+    attendee_name: Optional[str] = None
+    
+    class Config:
+        extra = "ignore"
 
 # --- 2. MODÈLE PRINCIPAL (L'Événement) ---
 
@@ -25,38 +39,46 @@ class UnipileMessageEvent(BaseModel):
     Modèle strict et exhaustif pour l'événement 'message_received' d'Unipile.
     """
     # Métadonnées techniques
-    event: str = Field(description="Type d'événement (ex: message_received)")
-    account_id: str = Field(description="ID du compte Unipile connecté")
+    event: str = Field(description="Type d'événement")
+    account_id: str = Field(description="ID du compte Unipile")
     
     # Identifiants Uniques
-    message_id: str = Field(alias="id")  # Unipile envoie "id", on le mappe vers "message_id" pour la clarté
+    message_id: str = Field(alias="id")  
     chat_id: str
     
     # Horodatage
     timestamp: str 
     
     # Contenu du message
-    # Unipile met le texte dans "text" OU "body" selon les versions, on gère les deux via alias
     text: Optional[str] = Field(default="", validation_alias="text") 
     
     # Qui parle ?
     sender: SenderInfo = Field(default_factory=SenderInfo)
-    is_sender: bool = Field(default=False, description="True si c'est le propriétaire du compte qui parle")
+    is_sender: bool = Field(default=False)
     
-    # Infos sur le Groupe (Nouveau & Important)
-    chat_name: Optional[str] = Field(default=None, description="Nom du groupe si disponible")
-    # Liste des IDs des participants (utile pour savoir qui est dans la discussion)
-    attendees_ids: List[str] = Field(default=[], alias="attendees") 
+    # Infos sur le Groupe
+    chat_name: Optional[str] = Field(default=None)
+    
+    # CORRECTIF : On mappe le JSON 'attendees' vers une liste d'objets, pas de strings
+    attendees_data: List[AttendeeItem] = Field(default=[], alias="attendees") 
 
-    # Pièces jointes (Typées proprement maintenant)
+    # Pièces jointes
     attachments: List[Attachment] = Field(default_factory=list)
+
+    # --- Propriétés Calculées (Pour compatibilité) ---
+    
+    @property
+    def attendees_ids(self) -> List[str]:
+        """
+        Extrait automatiquement la liste des IDs pour que le reste du code continue de marcher.
+        """
+        return [a.attendee_id for a in self.attendees_data if a.attendee_id]
 
     # --- Validateurs & Logique ---
 
     @field_validator('timestamp', mode='before')
     @classmethod
     def normalize_timestamp(cls, v):
-        """Assure qu'on a toujours une date valide, même si vide."""
         if not v:
             return datetime.utcnow().isoformat()
         return v
@@ -64,11 +86,9 @@ class UnipileMessageEvent(BaseModel):
     @field_validator('text', mode='before')
     @classmethod
     def ensure_text_string(cls, v):
-        """Évite les crashs si le texte est None (ex: juste une image)."""
         return v if v else ""
 
     class Config:
-        """Configuration Pydantic Avancée"""
-        extra = "ignore"            # Ignore les champs inconnus (futurs updates Unipile)
-        populate_by_name = True     # Permet d'utiliser nos noms (message_id) OU les alias (id)
-        from_attributes = True      # Compatible avec les ORM si besoin
+        extra = "ignore"            
+        populate_by_name = True     
+        from_attributes = True
